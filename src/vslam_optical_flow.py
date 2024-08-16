@@ -7,7 +7,6 @@ import cv2
 import numpy as np
 import tf.transformations as transformations
 import tf
-import pyrealsense2 as rs
 from geometry_msgs.msg import TransformStamped
 import time
 import tf2_ros
@@ -24,6 +23,8 @@ prev_angle = 0
 image_size=(1500, 1500)
 scale=1000
 line_thickness=3
+quat = [0,0,0,1]
+loc = [0,0]
 # Başlangıç koordinatları
 x, y = image_size[1] // 2, image_size[0] // 2
 # Boş bir görüntü oluştur
@@ -68,14 +69,18 @@ def image_callback(msg):
     global prev_angle, scale, line_thickness, image, x, y
     global last_call
     global T_base_camera
+    global quat
+    global loc
 
     timer = time.time()
-    if last_call is None:
+    if last_call is not None:
+        interval = timer - last_call
+        fps = 1 / interval
         last_call = timer
-    interval = timer - last_call
-    fps = 1 / interval
-    last_call = timer
-    #print("FPS", fps)
+        #print("FPS", fps)
+
+    if last_call is None:
+        last_call = timer    
 
     if frame is None:
         frame = CvBridge().imgmsg_to_cv2(msg, "bgr8")
@@ -101,24 +106,30 @@ def image_callback(msg):
     good_old = p0[st == 1]
 
     # Optik akış vektörlerini çiz
-    temp_d1 = []
-    temp_d2 = []
+    temp_d1s = []
+    temp_d2s = []
     for i, (new, old) in enumerate(zip(good_new, good_old)):
         a, b = new.ravel()
         c, d = old.ravel()
 
-        temp_d1.append(a - c)
-        temp_d2.append(b - d)
+        temp_d1s.append(a - c)
+        temp_d2s.append(b - d)
         # Hareket vektörlerini çiz
         frame = cv2.arrowedLine(frame, (int(c), int(d)), (int(a), int(b)), (0, 255, 0), 2)
         # Özellik noktalarını çiz
         frame = cv2.circle(frame, (int(a), int(b)), 5, (0, 0, 255), -1)
-    temp_d1 = np.median(np.array(temp_d1)) * 0.00012
-    temp_d2 = np.median(np.array(temp_d2)) * 0.000129
+    #temp_d1 = np.median(np.array(temp_d1)) * 0.0001431767459402224
+    #temp_d2 = np.median(np.array(temp_d2)) * 0.0001508210276773436
+    temp_d1 = np.median(np.array(temp_d1s)) * 0.000096954
+    temp_d2 = np.median(np.array(temp_d2s)) * 0.000096954
+    print(f"d1: %.7f, d2: %.7f" %(temp_d1,temp_d2))
+    #temp_d1 = 0
     d1.append(temp_d1)
     d2.append(temp_d2)
+    loc[0] = loc[0] + temp_d1
+    loc[1] = loc[1] + temp_d2
 
-    vel = np.sqrt(temp_d1**2 + temp_d2**2)/0.067
+    vel = np.sqrt(temp_d1**2 + temp_d2**2) * fps
     print(f"vel {vel:.2f} m/s")
 
     if np.isnan(temp_d1) or np.isnan(temp_d2) or np.isnan(x + temp_d1 * scale) or np.isnan(y + temp_d2 * scale):
@@ -155,7 +166,8 @@ def image_callback(msg):
         #print("Base_link'in yeni pozisyonu:", new_position)
         #print("Base_link'in yeni oryantasyonu (roll, pitch, yaw):", new_orientation)   
 
-        quat = tf.transformations.quaternion_from_matrix(T_base_new)
+        if abs(temp_d1) >= 0.001 or abs(temp_d2) >= 0.001:
+            quat = tf.transformations.quaternion_from_matrix(T_base_new)
 
         tf_pub = tf.TransformBroadcaster()
 
@@ -163,9 +175,15 @@ def image_callback(msg):
         tf_msg.header.stamp = rospy.Time.now()
         tf_msg.header.frame_id = "map"
         tf_msg.child_frame_id = "base_estimation"
-        tf_msg.transform.translation.x = new_x/1000 - 0.78
-        tf_msg.transform.translation.y = new_y/1000 + 1.19
-        tf_msg.transform.translation.z = 0
+        """tf_msg.transform.translation.x = new_x/1000 - 0.78 + 0.95
+        tf_msg.transform.translation.y = new_y/1000 + 1.22 - 0.01
+        tf_msg.transform.translation.z = 0 + 0.1"""
+        tf_msg.transform.translation.x = loc[1] - 0.78 + 0.95
+        tf_msg.transform.translation.y = loc[0] + 1.22 - 0.01
+        tf_msg.transform.translation.z = 0 + 0.1
+        """tf_msg.transform.translation.x = new_x/1000
+        tf_msg.transform.translation.y = new_y/1000
+        tf_msg.transform.translation.z = 0"""
         tf_msg.transform.rotation.x = quat[0]
         tf_msg.transform.rotation.y = quat[1]
         tf_msg.transform.rotation.z = quat[2]
@@ -175,7 +193,7 @@ def image_callback(msg):
 
         # Hareket yönünü gösteren ok çiz
         cv2.arrowedLine(image, (int(x), int(y)), (int(new_x), int(new_y)), (0, 0, 255), line_thickness)
-        cv2.circle(image, (int(1000*new_position[0])+640, int(1000*new_position[1])+360), 3, (255, 0, 0), -1)
+        # cv2.circle(image, (int(1000*new_position[0])+640, int(1000*new_position[1])+360), 3, (255, 0, 0), -1)
         # Yeni noktayı güncelle
         x, y = new_x, new_y
         # Önceki hareket açısını güncelle
