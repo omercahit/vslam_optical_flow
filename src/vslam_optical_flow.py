@@ -24,7 +24,7 @@ image_size=(1500, 1500)
 scale=1000
 line_thickness=3
 quat = [0,0,0,1]
-loc = [0,0]
+loc = [0,0,0] # x, y, theta
 # Başlangıç koordinatları
 x, y = image_size[1] // 2, image_size[0] // 2
 # Boş bir görüntü oluştur
@@ -122,7 +122,7 @@ def image_callback(msg):
     #temp_d2 = np.median(np.array(temp_d2)) * 0.0001508210276773436
     temp_d1 = np.median(np.array(temp_d1s)) * 0.000096954
     temp_d2 = np.median(np.array(temp_d2s)) * 0.000096954
-    print(f"d1: %.7f, d2: %.7f" %(temp_d1,temp_d2))
+    #print(f"d1: %.7f, d2: %.7f" %(temp_d1,temp_d2))
     #temp_d1 = 0
     d1.append(temp_d1)
     d2.append(temp_d2)
@@ -130,26 +130,32 @@ def image_callback(msg):
     loc[1] = loc[1] + temp_d2
 
     vel = np.sqrt(temp_d1**2 + temp_d2**2) * fps
-    print(f"vel {vel:.2f} m/s")
+    #print(f"vel {vel:.2f} m/s")
 
     if np.isnan(temp_d1) or np.isnan(temp_d2) or np.isnan(x + temp_d1 * scale) or np.isnan(y + temp_d2 * scale):
         return
     
+    # Açı hesabı
+    
+    try:
+        H, mask = cv2.findHomography(good_old, good_new, cv2.RANSAC, 5.0)
+        theta = np.arctan2(H[1, 0], H[0, 0])
+        #print(H[1, 0], H[0, 0])
+        loc[2] = loc[2] + theta
+        print(f"Açısal değişim: {np.degrees(loc[2])} derece")
+    except:
+        print("Not enough points to calculate angle")
+
+
     # Hareket vektörünün büyüklüğünü ve açısını hesapla
     magnitude = np.sqrt(temp_d1**2 + temp_d2**2)
     angle = np.arctan2(temp_d2, temp_d1) - np.pi/2
+    #angle = theta
 
     if magnitude > 0:
         #print(np.degrees(angle),magnitude)
-        T_camera_new_old = create_transformation_matrix([temp_d1, temp_d2, 0], [0, 0, angle])
+        T_camera_new_old = create_transformation_matrix([temp_d1, temp_d2, 0], [0, 0, loc[2]])
 
-        """if 30 < np.abs(np.degrees(angle)) < 150:
-            magnitude = magnitude / 20"""
-
-        """if prev_angle > np.pi:
-            prev_angle = prev_angle - np.pi
-        if prev_angle < -np.pi:
-            prev_angle = prev_angle + np.pi"""
         angle += prev_angle
         # Yeni noktanın konumunu hesapla
         #print("tot. angle", np.degrees(angle))
@@ -192,7 +198,7 @@ def image_callback(msg):
         tf_pub.sendTransformMessage(tf_msg)
 
         # Hareket yönünü gösteren ok çiz
-        cv2.arrowedLine(image, (int(x), int(y)), (int(new_x), int(new_y)), (0, 0, 255), line_thickness)
+        #cv2.arrowedLine(image, (int(x), int(y)), (int(new_x), int(new_y)), (0, 0, 255), line_thickness)
         # cv2.circle(image, (int(1000*new_position[0])+640, int(1000*new_position[1])+360), 3, (255, 0, 0), -1)
         # Yeni noktayı güncelle
         x, y = new_x, new_y
@@ -201,13 +207,10 @@ def image_callback(msg):
         
 
     cv2.imshow('Optical flow', frame)
-    cv2.imshow('Directions', image)
+    #cv2.imshow('Directions', image)
     cv2.waitKey(1)
     prev_gray = gray
     
-    
-
-
 
 def image_subscriber():
     rospy.init_node('vslam_optical_flow_node', anonymous=True)
