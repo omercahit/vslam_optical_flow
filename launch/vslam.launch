@@ -1,0 +1,16 @@
+<launch>
+
+    <node pkg="map_server" name="map_serverr" type="map_server" respawn="false" args="/home/oozdemir/catkin_ws/src/realsense-ros/realsense2_camera/map/gazebo_map_20mm.yaml" output="screen"/>
+    
+    <arg name="offline"          default="false"/>
+    
+    <include unless="$(arg offline)" 
+        file="$(find realsense2_camera)/launch/rs_camera.launch">
+    </include>
+    
+      <!-- rviz --> 
+  <node pkg="rviz" type="rviz" name="rviz" required="true" args="-d $(find moobot_navigation)/rviz/test_vslam.rviz"/>
+  
+  <node pkg="vslam_optical_flow" type="vslam_optical_flow.py" name="vslam_optical_flow" output="screen"/>
+    
+</launch>    
