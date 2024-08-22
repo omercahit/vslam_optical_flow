@@ -9,8 +9,19 @@ import tf.transformations as transformations
 import tf
 from geometry_msgs.msg import TransformStamped
 import time
-import tf2_ros
-import math
+import os
+import yaml
+
+cwd = os.path.dirname(os.path.realpath(__file__))
+cwd = (cwd.split(os.sep)[:-1])
+cwd = (os.sep.join(cwd))
+
+cwd = cwd + '/params/vslam_params.yaml'
+
+with open(cwd, 'r') as file:
+    params = yaml.safe_load(file)
+
+print(params)
 
 frame = None
 d1 = []
@@ -22,7 +33,7 @@ image_size=(1500, 1500)
 scale=1000
 line_thickness=3
 quat = [0,0,0,1]
-loc = [0,0,0] # x, y, theta
+loc = params['initial_pose']
 # Başlangıç koordinatları
 x, y = image_size[1] // 2, image_size[0] // 2
 # Boş bir görüntü oluştur
@@ -60,7 +71,7 @@ def create_transformation_matrix(translation, rotation):
     
     return T
 
-T_base_camera = create_transformation_matrix([0.0, -0.01, 0.15], [0, 1.57, 0])
+T_base_camera = create_transformation_matrix(params['transform_to_base'][0], params['transform_to_base'][1])
 
 def image_callback(msg):
     global d1, d2, frame, prev_gray, feature_params
@@ -83,16 +94,13 @@ def image_callback(msg):
     if frame is None:
         frame = CvBridge().imgmsg_to_cv2(msg, "bgr8")
         prev_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        #prev_gray = prev_gray[:, 280:1000]
         prev_gray = prev_gray[60:660, 397:997]
         return
 
     lk_params = dict(winSize=(120, 120), maxLevel=2, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
 
     frame = CvBridge().imgmsg_to_cv2(msg, "bgr8")
-    #frame = frame[:, 280:1000]
     frame = frame[60:660, 397:997]
-    #print(frame.shape)
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -118,10 +126,9 @@ def image_callback(msg):
         frame = cv2.circle(frame, (int(a), int(b)), 5, (0, 0, 255), -1)
     #temp_d1 = np.median(np.array(temp_d1)) * 0.0001431767459402224
     #temp_d2 = np.median(np.array(temp_d2)) * 0.0001508210276773436
-    temp_d1 = np.median(np.array(temp_d1s)) * 0.000096954
-    temp_d2 = np.median(np.array(temp_d2s)) * 0.000096954
+    temp_d1 = np.median(np.array(temp_d1s)) * params['calibration_multiplier']
+    temp_d2 = np.median(np.array(temp_d2s)) * params['calibration_multiplier']
     #print(f"d1: %.7f, d2: %.7f" %(temp_d1,temp_d2))
-    #temp_d1 = 0
     d1.append(temp_d1)
     d2.append(temp_d2)
     loc[0] = loc[0] + temp_d1
@@ -151,12 +158,10 @@ def image_callback(msg):
     #angle = theta
 
     if magnitude > 0:
-        #print(np.degrees(angle),magnitude)
         T_camera_new_old = create_transformation_matrix([temp_d1, temp_d2, 0], [0, 0, loc[2]])
 
         angle += prev_angle
         # Yeni noktanın konumunu hesapla
-        #print("tot. angle", np.degrees(angle))
         new_x = x + magnitude * np.cos(angle) * scale
         new_y = y + magnitude * np.sin(angle) * scale
 
@@ -167,9 +172,6 @@ def image_callback(msg):
                         np.arctan2(-T_base_new[2, 0], np.sqrt(T_base_new[2, 1]**2 + T_base_new[2, 2]**2)),
                         np.arctan2(T_base_new[1, 0], T_base_new[0, 0])]
 
-        #print("Base_link'in yeni pozisyonu:", new_position)
-        #print("Base_link'in yeni oryantasyonu (roll, pitch, yaw):", new_orientation)   
-
         if abs(temp_d1) >= 0.001 or abs(temp_d2) >= 0.001:
             quat = tf.transformations.quaternion_from_matrix(T_base_new)
 
@@ -178,16 +180,10 @@ def image_callback(msg):
         tf_msg = TransformStamped()
         tf_msg.header.stamp = rospy.Time.now()
         tf_msg.header.frame_id = "map"
-        tf_msg.child_frame_id = "base_estimation"
-        """tf_msg.transform.translation.x = new_x/1000 - 0.78 + 0.95
-        tf_msg.transform.translation.y = new_y/1000 + 1.22 - 0.01
-        tf_msg.transform.translation.z = 0 + 0.1"""
+        tf_msg.child_frame_id = params['tf_frame_name']
         tf_msg.transform.translation.x = loc[1] - 0.78 + 0.95
         tf_msg.transform.translation.y = loc[0] + 1.22 - 0.01
         tf_msg.transform.translation.z = 0 + 0.1
-        """tf_msg.transform.translation.x = new_x/1000
-        tf_msg.transform.translation.y = new_y/1000
-        tf_msg.transform.translation.z = 0"""
         tf_msg.transform.rotation.x = quat[0]
         tf_msg.transform.rotation.y = quat[1]
         tf_msg.transform.rotation.z = quat[2]
@@ -203,17 +199,17 @@ def image_callback(msg):
         # Önceki hareket açısını güncelle
         prev_angle = angle
         
-
-    cv2.imshow('Optical flow', frame)
-    #cv2.imshow('Directions', image)
-    cv2.waitKey(1)
+    if params['show_flows']:
+        cv2.imshow('Optical flow', frame)
+        #cv2.imshow('Directions', image)
+        cv2.waitKey(1)
     prev_gray = gray
     
 
 def image_subscriber():
     rospy.init_node('vslam_optical_flow_node', anonymous=True)
 
-    rospy.Subscriber('/camera/color/image_raw', Image, image_callback)
+    rospy.Subscriber(params['image_topic'], Image, image_callback)
 
     rospy.spin()
 
